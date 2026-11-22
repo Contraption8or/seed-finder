@@ -85,7 +85,7 @@ function checkForUpdates() {
 
 function setupUpdater() {
   autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoInstallOnAppQuit = !SMOKE; // smoke tests must never install anything
   if (process.env.SF_FORCE_UPDATES) autoUpdater.forceDevUpdateConfig = true;
   autoUpdater.on('update-available', (info) => setStatus({ state: 'downloading', version: info.version, percent: 0 }));
   autoUpdater.on('update-not-available', () => setStatus({ state: 'latest' }));
