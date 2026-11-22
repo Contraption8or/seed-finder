@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Seed Finder</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="icon.png">
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <header class="brand">
+      <div class="logo">◆</div>
+      <div>
+        <h1>Seed Finder</h1>
+        <div class="sub">Java Edition world generation</div>
+      </div>
+    </header>
+
+    <section class="card">
+      <div class="row">
+        <label>Version
+          <select id="version"></select>
+        </label>
+        <label class="check"><input type="checkbox" id="large"> Large biomes</label>
+      </div>
+      <label>Measure distances from
+        <select id="center">
+          <option value="1">World spawn</option>
+          <option value="0">0, 0 (much faster)</option>
+          <option value="2">Custom coordinates (fast)</option>
+        </select>
+      </label>
+      <div class="row" id="customCenter" hidden>
+        <label>X <input type="number" id="cx" value="0"></label>
+        <label>Z <input type="number" id="cz" value="0"></label>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Filters</h2>
+        <div class="headtools">
+          <select id="presets" title="Load a preset (replaces filters)"></select>
+          <button id="clearFilters" class="mini" title="Remove all filters">Clear</button>
+        </div>
+      </div>
+      <select id="addFilter"></select>
+      <div id="filters"></div>
+      <div id="noFilters" class="hint">No filters yet — every seed will match. Add one above or load a preset.</div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Search</h2></div>
+      <div class="row">
+        <label>Seeds
+          <select id="mode">
+            <option value="random">Random</option>
+            <option value="seq">Sequential from…</option>
+          </select>
+        </label>
+        <label id="startWrap" hidden>Start at
+          <input id="startSeed" value="0" spellcheck="false">
+        </label>
+      </div>
+      <div class="row">
+        <label>Threads <span id="threadsVal"></span>
+          <input type="range" id="threads" min="1" max="16" value="4">
+        </label>
+        <label>Stop after
+          <input type="number" id="maxResults" min="1" max="5000" value="25">
+        </label>
+      </div>
+      <button id="searchBtn" class="primary">Start search</button>
+      <div id="stats" class="stats"></div>
+      <div id="results"></div>
+    </section>
+    <div id="appStatus" hidden></div>
+    <footer class="foot">World generation by <a href="https://github.com/Cubitect/cubiomes" target="_blank" rel="noopener">cubiomes</a>. Not affiliated with Mojang or Microsoft.</footer>
+  </aside>
+
+  <div id="resizer" title="Drag to resize"></div>
+  <main id="main">
+    <div id="topbar">
+      <div class="seedbox">
+        <span>Seed</span>
+        <input id="seedInput" spellcheck="false" placeholder="number or text">
+        <button id="seedGo">View</button>
+        <button id="seedRandom" title="Random seed">🎲</button>
+        <button id="seedCopy" title="Copy seed">Copy</button>
+      </div>
+      <div class="tabs" id="dimTabs">
+        <button data-dim="0" class="on">Overworld</button>
+        <button data-dim="-1">Nether</button>
+        <button data-dim="1">End</button>
+      </div>
+    </div>
+    <div id="mapWrap">
+      <canvas id="map"></canvas>
+      <div id="tooltip" hidden></div>
+      <div id="mapTools">
+        <button id="zoomIn" title="Zoom in">+</button>
+        <button id="zoomOut" title="Zoom out">−</button>
+        <button id="goSpawn" title="Center on spawn">⌂</button>
+        <button id="goOrigin" title="Center on 0,0">⊙</button>
+      </div>
+      <form id="gotoForm" title="Jump to coordinates">
+        <input id="gotoInput" placeholder="x, z" spellcheck="false">
+      </form>
+      <div id="readout"></div>
+      <div id="legend"></div>
+      <div id="loading" hidden>Loading engine…</div>
+    </div>
+  </main>
+</div>
+<template id="biomePickerTpl"></template>
+<script type="module" src="app.js"></script>
+</body>
+</html>
