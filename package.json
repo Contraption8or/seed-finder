@@ -1,13 +1,16 @@
 {
   "name": "seed-finder",
   "productName": "Seed Finder",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Find Minecraft Java Edition seeds by spawn, biomes and structures, with Overworld/Nether/End maps. Supports 1.0 to 26.3.",
   "author": "Contraption8or",
   "homepage": "https://github.com/Contraption8or/seed-finder",
-  "repository": { "type": "git", "url": "https://github.com/Contraption8or/seed-finder.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Contraption8or/seed-finder.git"
+  },
   "main": "electron/main.cjs",
   "scripts": {
     "app": "electron .",
@@ -32,10 +35,24 @@
   "build": {
     "appId": "io.github.contraption8or.seedfinder",
     "productName": "Seed Finder",
-    "directories": { "output": "release", "buildResources": "build" },
-    "files": ["electron/**", "web/**", "package.json"],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**",
+      "web/**",
+      "package.json"
+    ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "build/icon.png"
     },
     "nsis": {
@@ -44,6 +61,13 @@
       "artifactName": "Seed-Finder-Setup-${version}.${ext}",
       "shortcutName": "Seed Finder"
     },
-    "publish": [{ "provider": "github", "owner": "Contraption8or", "repo": "seed-finder", "releaseType": "release" }]
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Contraption8or",
+        "repo": "seed-finder",
+        "releaseType": "release"
+      }
+    ]
   }
 }
