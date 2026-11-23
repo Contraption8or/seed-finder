@@ -118,6 +118,8 @@ app.whenReady().then(() => {
   setupUpdater();
   createWindow();
   win.webContents.once('did-finish-load', checkForUpdates);
+  // smoke tests can drive the page (e.g. start a search before the screenshot)
+  if (SMOKE && process.env.SF_SMOKE_JS) win.webContents.once('did-finish-load', () => setTimeout(() => win.webContents.executeJavaScript(process.env.SF_SMOKE_JS).catch(() => {}), 2500));
   if (SMOKE && process.env.SF_SMOKE_SCREENSHOT) {
     setTimeout(async () => {
       const img = await win.webContents.capturePage();

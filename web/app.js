@@ -398,7 +398,7 @@ function draw() {
   const v = view();
   const dim = state.dim;
   ctx.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
-  ctx.fillStyle = '#0b0c0e';
+  ctx.fillStyle = '#141418';
   ctx.fillRect(0, 0, W, H);
   ctx.imageSmoothingEnabled = false;
 
@@ -958,7 +958,7 @@ function startSearch() {
     if (p == null) { toast('Enter a start seed'); return; }
     next = p;
   }
-  $('results').innerHTML = '';
+  clearResultList();
   const s = {
     workers: [], tested: 0, found: [], seen: new Set(), t0: performance.now(),
     mc: state.mc, large: state.large, filters: arr, random: state.mode === 'random', next,
@@ -989,8 +989,7 @@ function startSearch() {
     s.workers.push(w);
   }
   s.timer = setInterval(() => updateStats(s), 250);
-  $('searchBtn').textContent = 'Stop';
-  $('searchBtn').classList.add('stop');
+  setSearchButton(true);
   updateStats(s);
 }
 
@@ -1001,15 +1000,36 @@ function stopSearch() {
   for (const w of s.workers) w.terminate();
   clearInterval(s.timer);
   updateStats(s, true);
-  $('searchBtn').textContent = 'Start search';
-  $('searchBtn').classList.remove('stop');
+  setSearchButton(false);
+}
+
+const ico = (name) => `<svg class="ic"><use href="#i-${name}"/></svg>`;
+
+function setSearchButton(running) {
+  const b = $('searchBtn');
+  b.innerHTML = running ? `${ico('stop')}Stop search` : `${ico('play')}Start search`;
+  b.classList.toggle('stop', running);
+  $('clearResults').disabled = running;
+}
+
+function updateResultCount(n = document.querySelectorAll('.result').length) {
+  $('resultCount').textContent = `${n}/${search ? search.max : state.maxResults}`;
+  $('noResults').hidden = n > 0;
+  $('results').hidden = n === 0;
+}
+
+function clearResultList() {
+  $('results').innerHTML = '';
+  $('stats').textContent = '';
+  updateResultCount(0);
 }
 
 function updateStats(s, done = false) {
   const secs = (performance.now() - s.t0) / 1000;
   const rate = s.tested / Math.max(0.001, secs);
   const rarity = s.found.length ? ` · ≈1 in ${fmt(s.tested / s.found.length)}` : '';
-  $('stats').textContent = `${done ? 'Stopped. ' : 'Searching… '}${fmt(s.tested)} seeds checked · ${fmt(rate)}/s · ${s.found.length} found${rarity}`;
+  $('stats').textContent = `${done ? 'Stopped · ' : 'Searching · '}${fmt(s.tested)} checked · ${fmt(rate)}/s${rarity}`;
+  updateResultCount(s.found.length);
 }
 
 function addResult(s, seed) {
@@ -1018,11 +1038,15 @@ function addResult(s, seed) {
   if (s.seen.has(key)) return;
   s.seen.add(key);
   s.found.push(seed);
-  const row = h('div', { class: 'result', onclick: () => showSeed(seed) },
-    h('code', { textContent: key }),
-    h('button', { textContent: 'Copy', onclick: (e) => { e.stopPropagation(); copy(key); } }));
+  const box = h('span', { class: 'box' }); box.innerHTML = ico('check');
+  const copyBtn = h('button', { class: 'copy', title: 'Copy seed', onclick: (e) => { e.stopPropagation(); copy(key); } });
+  copyBtn.innerHTML = ico('copy');
+  const meta = `Match #${s.found.length} · after ${fmt(s.tested)} seeds`;
+  const row = h('div', { class: 'result', onclick: () => showSeed(seed), title: 'Open on the map' },
+    box, h('div', { class: 'body' }, h('div', { class: 'title', textContent: key }), h('div', { class: 'meta', textContent: meta })), copyBtn);
   row.dataset.seed = key;
   $('results').append(row);
+  updateResultCount(s.found.length);
   if (!s.firstShown) { s.firstShown = true; showSeed(seed); }
 }
 
@@ -1044,7 +1068,18 @@ function setupSearchUi() {
   th.max = cores; th.value = state.threads; $('threadsVal').textContent = state.threads;
   th.oninput = () => { state.threads = +th.value; $('threadsVal').textContent = th.value; persist(); };
   $('maxResults').value = state.maxResults;
-  $('maxResults').oninput = (e) => { state.maxResults = Math.max(1, parseInt(e.target.value) || 1); persist(); };
+  $('maxResults').oninput = (e) => { state.maxResults = Math.max(1, parseInt(e.target.value) || 1); persist(); if (!search) updateResultCount(); };
+  setSearchButton(false);
+  updateResultCount(0);
+  $('clearResults').onclick = () => { if (!search) clearResultList(); };
+  const hist = $('history'), tog = $('historyToggle');
+  const setCollapsed = (c) => {
+    hist.classList.toggle('collapsed', c);
+    tog.title = c ? 'Show results' : 'Hide results';
+    localStorage.setItem('seedfinder:resultsHidden', c ? '1' : '');
+  };
+  setCollapsed(localStorage.getItem('seedfinder:resultsHidden') === '1');
+  tog.onclick = () => setCollapsed(!hist.classList.contains('collapsed'));
   $('searchBtn').onclick = () => (search ? stopSearch() : startSearch());
 
   const add = $('addFilter');
