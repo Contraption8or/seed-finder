@@ -263,6 +263,10 @@ int getOldBetaBiome(float t, float h);
  */
 int climateToBiome(int mc, const uint64_t np[6], uint64_t *dat);
 
+// Seed Finder world types: set before setupGenerator() / applySeed()
+extern int g_sf_amplified;     // 1 = amplified offset spline (1.18+)
+extern int g_sf_fixed_biome;   // >= 0: every overworld biome lookup returns this
+
 /**
  * Initialize BiomeNoise for only a single climate parameter.
  * If nptype == NP_DEPTH, the value is sampled at y=0. Note that this value

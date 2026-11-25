@@ -44,7 +44,7 @@ because structure positions can be pre-checked without generating biomes.
 
 | Filter | What it does |
 |---|---|
-| **Spawn biome** | Spawn is / is NOT in any of the chosen biomes |
+| **Spawn biome** | Spawn is / is NOT in any of the chosen biomes. Optional **biome size**: the spawn biome must cover N% of a radius around spawn (e.g. 90% of 500 blocks) |
 | **Spawn distance** | Spawn between X and Y blocks from 0,0 |
 | **Spawn height** | Approximate surface Y at spawn (mountain or low spawns) |
 | **Biomes near center** | *Any of* / *none of* / *all of* the chosen biomes within R, or *cover N–M % of the area*. Works for Overworld (surface, caves y≈0, or deep caves y≈-40), Nether and End |
@@ -52,6 +52,7 @@ because structure positions can be pre-checked without generating biomes.
 | **Structure cluster** | N of a structure all within D blocks of each other, somewhere within R (double, triple or quad witch huts, outposts, …) |
 | **Strongholds** | At least N strongholds within R |
 | **Slime chunks** | At least N slime chunks within R |
+| **Chests close together** | At least N guaranteed loot chests within D blocks of each other, near the center (desert pyramid 4, jungle temple 2; buried treasure, shipwreck, ruined portal, pillager outpost and igloo-with-basement 1 each) |
 
 Structures: Village, Desert Pyramid, Jungle Temple, Swamp Hut, Igloo, Pillager
 Outpost, Woodland Mansion, Ocean Monument, Ocean Ruin, Shipwreck, Buried
@@ -63,6 +64,67 @@ version are offered.
 The biome picker has **groups** (all oceans, land, forests, snowy, mountains,
 cave biomes, …), and **Presets…** loads common setups such as speedrun spawn,
 mushroom island, survival island, elytra, witch farm, and 26.2/26.3 specials.
+
+### Impossible filters
+
+Seed Finder checks your filters as you edit them. If they can never match together,
+the filters involved turn red, a note explains why, and **the search won't start**
+until you fix them. It uses each version's real rules, for example:
+
+- a structure on the spawn point that can't spawn in the spawn biome (a village right
+  on a swamp spawn),
+- "spawn in X" together with "none of X near spawn", or spawn biome filters that
+  contradict each other,
+- a structure whose only possible biomes you've excluded around it,
+- more structures than their spacing allows (10 villages in 300 blocks, two ruined
+  portals 120 blocks apart),
+- End Cities within 1008 blocks of the End's center, strongholds closer to 0,0 than the
+  first ring allows,
+- biomes or structures that don't exist in the version or world type,
+- coverage percentages that add up to more than 100%.
+
+Combinations that are possible but very rare show an amber "unlikely" note instead
+and don't block the search.
+
+### Code mode
+
+The **Code** tab is a tiny language for very specific searches, one condition per
+line (all must match). The **Reference** under the editor lists everything; click a
+line to add it. Switching to Code converts your builder filters automatically.
+
+```
+version 26.3
+world amplified
+center spawn
+spawn in plains, meadow, @forests size 400 90%
+village(desert) >= 2 within 600
+zombie village within 900
+chests >= 3 within 250          # e.g. a desert pyramid, or 3 shipwrecks/treasures together
+swamp_hut cluster 3 within 150 near 2000
+biome none @oceans within 300
+cave biome lush_caves within 100
+end_city_ship within 1500
+```
+
+Biomes use their game IDs; `*` is a wildcard (`*ocean*`) and `@oceans`,
+`@forests`, `@land`, etc. are groups. Mistyped names get a suggestion and the
+line number.
+
+## World types
+
+| World type | Versions | What changes |
+|---|---|---|
+| Default | all | — |
+| Large Biomes | 1.3+ | Biomes 4× larger; structure positions unchanged |
+| Amplified | 1.7+ | Biome layout and structures as Default; from 1.18 cave biomes sit at different depths (the terrain-offset spline doubles every positive value) |
+| Superflat | 1.1+ | Classic Flat: all Plains, only villages and strongholds; spawn is always 0,0; strongholds are identical in every flat world (1.19.3+) |
+| Single Biome | 1.13+ | Normal terrain, one chosen biome; only structures that can spawn in it |
+
+All five were checked against the official 26.3 server: biomes 99.99–100 % identical,
+every structure matched (apart from the usual terrain-height extras), spawn and
+strongholds identical. That check found two game details that are now handled:
+fixed-biome worlds place strongholds at a random point near each ring position
+instead of scanning for a biome, and superflat worlds use seed 0 for strongholds.
 
 ## Map
 

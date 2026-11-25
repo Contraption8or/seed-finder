@@ -1,4 +1,6 @@
 import { loadModule, createEngine } from './wasm-api.js';
+import { analyze } from './checker.js';
+import { parse as parseCode, toCode, REFERENCE, STARTER } from './dsl.js';
 
 // ---------------------------------------------------------------------------
 // Static data
@@ -62,6 +64,15 @@ const BIOME_GROUPS = [
   ['Cave biomes', (n) => /caves|deep_dark/.test(n)],
 ];
 
+// Java "World Type" button. minMc = first cubiomes version enum that has it.
+const WORLD_TYPES = [
+  { id: 0, name: 'Default', minMc: 0, hint: 'Normal worlds.' },
+  { id: 1, name: 'Large Biomes', minMc: 6, hint: 'Biomes are 4× larger in each direction. Structure positions are the same as Default.' },
+  { id: 2, name: 'Amplified', minMc: 10, hint: 'Huge terrain. Biome layout and structures match Default; from 1.18, cave biomes sit at different depths and spawn can move.' },
+  { id: 3, name: 'Superflat', minMc: 4, hint: 'Classic Flat preset: all Plains; only villages and strongholds generate. Spawn is always 0,0 and strongholds are the same in every flat world (1.19.3+).' },
+  { id: 4, name: 'Single Biome', minMc: 16, hint: 'Normal terrain, one biome everywhere. Only structures that can spawn in that biome generate.' },
+];
+
 const FILTER_KINDS = [
   ['Spawn', [
     ['spawnBiome', 'Spawn biome is / is not…'],
@@ -76,6 +87,7 @@ const FILTER_KINDS = [
     ['cluster', 'Structure cluster (e.g. double witch huts)'],
     ['stronghold', 'Strongholds near center'],
     ['slime', 'Slime chunks near center'],
+    ['chests', 'Chests close together (guaranteed loot)'],
   ]],
 ];
 
@@ -168,7 +180,11 @@ const cores = navigator.hardwareConcurrency || 4;
 
 const state = {
   mc: saved.mc ?? null,
-  large: !!saved.large,
+  worldType: saved.worldType ?? (saved.large ? 1 : 0),
+  singleBiome: saved.singleBiome ?? 1,
+  filterMode: saved.filterMode ?? 'builder',
+  code: saved.code ?? '',
+  codeSynced: saved.codeSynced ?? false,
   center: saved.center ?? 1,
   cx: saved.cx ?? 0,
   cz: saved.cz ?? 0,
@@ -186,7 +202,8 @@ const state = {
 
 function persist() {
   localStorage.setItem(STORE_KEY, JSON.stringify({
-    mc: state.mc, large: state.large, center: state.center, cx: state.cx, cz: state.cz,
+    mc: state.mc, worldType: state.worldType, singleBiome: state.singleBiome, filterMode: state.filterMode,
+    code: state.code, codeSynced: state.codeSynced, center: state.center, cx: state.cx, cz: state.cz,
     filters: state.filters, mode: state.mode, startSeed: state.startSeed, threads: state.threads,
     maxResults: state.maxResults, seed: String(state.seed), hidden: [...state.hidden],
   }));
@@ -267,10 +284,11 @@ let hover = null; // {px, pz}
 let iconHits = [];
 
 const view = () => state.views[state.dim];
-const worldMsg = () => ({ mc: state.mc, large: state.large, seed: state.seed });
+const fixedBiome = () => (state.worldType === 4 ? state.singleBiome : -1);
+const worldMsg = () => ({ mc: state.mc, wt: state.worldType, fixed: fixedBiome(), seed: state.seed });
 
 function resetWorld() {
-  worldKey = `${state.mc}|${state.large ? 1 : 0}|${state.seed}`;
+  worldKey = `${state.mc}|${state.worldType}|${fixedBiome()}|${state.seed}`;
   tiles.clear();
   pool.clear();
   info = null;
@@ -390,6 +408,8 @@ function filterCircles() {
     if (f.type === 'stronghold') add(0, f.radius, 'Stronghold');
     if (f.type === 'slime') add(0, f.radius, 'Slime chunks');
     if (f.type === 'spawnDist') add(0, f.max, 'Spawn max distance', { x: 0, z: 0 });
+    if (f.type === 'chests') add(0, f.radius, 'Chests');
+    if (f.type === 'spawnBiome' && !f.exclude && f.size > 0) add(0, f.size, `Spawn biome ${f.sizePct}%`, info ? info.spawn : null);
   }
   return out;
 }
@@ -676,7 +696,8 @@ function renderLegend() {
 // ---------------------------------------------------------------------------
 
 function loadVersionMeta() {
-  meta.world(state.mc, state.large, 0n);
+  meta.world(state.mc, state.worldType, 0n, fixedBiome());
+  allowedCache.clear();
   biomes = { 0: [], '-1': [], 1: [] };
   biomeIdByKey = {};
   for (let id = 0; id < 256; id++) {
@@ -710,11 +731,10 @@ function setupVersions() {
   sel.onchange = () => {
     state.mc = +sel.value;
     stopSearch();
+    if (WORLD_TYPES[state.worldType].minMc > state.mc) state.worldType = 0;
     loadVersionMeta();
-    renderFilters(); renderLegend(); resetWorld();
+    renderWorldTypes(); renderFilters(); renderLegend(); resetWorld();
   };
-  $('large').checked = state.large;
-  $('large').onchange = () => { state.large = $('large').checked; stopSearch(); loadVersionMeta(); resetWorld(); };
 
   const center = $('center');
   center.value = state.center;
@@ -726,13 +746,92 @@ function setupVersions() {
   $('cz').oninput = (e) => { state.cz = parseInt(e.target.value) || 0; changed(); };
 }
 
+function setWorldType(wt) {
+  state.worldType = wt;
+  stopSearch();
+  loadVersionMeta();
+  renderWorldTypes(); renderFilters(); renderLegend(); resetWorld();
+}
+
+function renderWorldTypes() {
+  const box = $('worldTypes');
+  box.innerHTML = '';
+  for (const t of WORLD_TYPES) {
+    const ok = state.mc >= t.minMc;
+    box.append(h('button', {
+      textContent: t.name, class: state.worldType === t.id ? 'on' : '', disabled: !ok,
+      title: ok ? t.hint : 'Not available in this version',
+      onclick: () => { if (state.worldType !== t.id) setWorldType(t.id); },
+    }));
+  }
+  const t = WORLD_TYPES[state.worldType];
+  $('wtHint').textContent = t.hint;
+  const sb = $('singleBiomeRow');
+  sb.hidden = state.worldType !== 4;
+  if (state.worldType === 4) {
+    const sel = $('singleBiome');
+    sel.innerHTML = '';
+    for (const b of biomes[0]) sel.append(h('option', { value: b.id, textContent: b.name, selected: b.id === state.singleBiome }));
+    if (!biomes[0].some((b) => b.id === state.singleBiome)) { state.singleBiome = biomes[0][0]?.id ?? 1; sel.value = state.singleBiome; }
+    sel.onchange = () => { state.singleBiome = +sel.value; setWorldType(4); };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Impossible-filter checks
+// ---------------------------------------------------------------------------
+
+const allowedCache = new Map();
+function allowedBiomes(st, variant) {
+  const key = st + ':' + variant;
+  if (allowedCache.has(key)) return allowedCache.get(key);
+  let set = new Set(biomes[0].filter((b) => meta.ex.eng_viable_biome(st, b.id)).map((b) => b.id));
+  if (st === 5 && variant) set = new Set([...set].filter((id) => id === variant || (variant === 1 && biomeIdByKey.meadow === id)));
+  allowedCache.set(key, set);
+  return set;
+}
+
+function checkerCtx() {
+  return {
+    mc: state.mc, wt: state.worldType, fixed: state.worldType === 3 ? biomeIdByKey.plains ?? 1 : state.singleBiome,
+    center: state.center, cx: state.cx, cz: state.cz,
+    name: (id) => prettyBiome(meta.biomeName(id)),
+    biomeExists: (id, dim) => biomes[dim]?.some((b) => b.id === id),
+    structInfo: (st) => meta.structInfo(st),
+    allowedBiomes, label: structLabel,
+  };
+}
+
+let lastIssues = { errors: [], warnings: [] };
+let codeErrors = [];
+function refreshIssues() {
+  lastIssues = analyze(state.filters, checkerCtx());
+  const box = $('issues');
+  box.innerHTML = '';
+  const blocked = lastIssues.errors.length > 0 || (state.filterMode === 'code' && codeErrors.length > 0);
+  if (state.filterMode === 'code' && codeErrors.length) {
+    box.append(h('div', { class: 'issue bad' }, h('b', {}, 'Fix the code first: '), `${codeErrors.length} line${codeErrors.length > 1 ? 's' : ''} couldn't be read.`));
+  }
+  for (const e of lastIssues.errors) box.append(h('div', { class: 'issue bad' }, h('b', {}, 'Impossible: '), e.msg));
+  for (const w of lastIssues.warnings) box.append(h('div', { class: 'issue warn' }, h('b', {}, 'Unlikely: '), w.msg));
+  box.hidden = !box.children.length;
+  const bad = new Set(lastIssues.errors.flatMap((e) => e.idx));
+  const meh = new Set(lastIssues.warnings.flatMap((e) => e.idx));
+  document.querySelectorAll('#filters .filter').forEach((el, i) => {
+    el.classList.toggle('bad', bad.has(i));
+    el.classList.toggle('meh', !bad.has(i) && meh.has(i));
+  });
+  if (!search) setSearchButton(false, blocked);
+  return !blocked;
+}
+
 // ---------------------------------------------------------------------------
 // Filters UI
 // ---------------------------------------------------------------------------
 
 function newFilter(type) {
   switch (type) {
-    case 'spawnBiome': return { type, biomes: [], exclude: false };
+    case 'spawnBiome': return { type, biomes: [], exclude: false, size: 0, sizePct: 90 };
     case 'spawnDist': return { type, max: 200, min: 0 };
     case 'spawnHeight': return { type, min: 90, max: 320 };
     case 'biome': return { type, dim: 0, mode: 'any', layer: 'surface', biomes: [], radius: 500, min: 30, max: 100 };
@@ -740,6 +839,7 @@ function newFilter(type) {
     case 'cluster': return { type, st: 3, count: 2, size: 150, radius: 2500 };
     case 'stronghold': return { type, radius: 1500, min: 1 };
     case 'slime': return { type, radius: 64, min: 4 };
+    case 'chests': return { type, min: 3, radius: 250, size: 16 };
   }
 }
 
@@ -840,9 +940,14 @@ function renderFilters() {
     if (f.type === 'spawnBiome') {
       title = 'Spawn biome';
       body = [
-        h('div', { class: 'inline' }, 'Spawn', selectInput([['0', 'is in'], ['1', 'is NOT in']], f.exclude ? 1 : 0, (v) => { f.exclude = v === '1'; changed(); }), 'any of:'),
+        h('div', { class: 'inline' }, 'Spawn', selectInput([['0', 'is in'], ['1', 'is NOT in']], f.exclude ? 1 : 0, (v) => { f.exclude = v === '1'; changed(); renderFilters(); }), 'any of:'),
         biomePicker(f, 0),
       ];
+      if (!f.exclude) {
+        const on = h('input', { type: 'checkbox', checked: f.size > 0, onchange: (e) => { f.size = e.target.checked ? (f.size || 500) : 0; changed(); renderFilters(); } });
+        body.push(h('label', { class: 'check inline-check' }, on, 'Biome size: it must stretch around spawn'));
+        if (f.size > 0) body.push(h('div', { class: 'inline' }, 'covering', numInput(f, 'sizePct', { min: 10, max: 100, width: '64px' }), '% of a', numInput(f, 'size', { min: 16, step: 50 }), 'block radius'));
+      }
     } else if (f.type === 'spawnDist') {
       title = 'Spawn distance from 0,0';
       body = [h('div', { class: 'inline' }, 'between', numInput(f, 'min', { min: 0 }), 'and', numInput(f, 'max', { min: 0 }), 'blocks')];
@@ -868,7 +973,7 @@ function renderFilters() {
       body = [
         h('div', { class: 'inline' }, structSelect(f)),
         h('div', { class: 'inline' }, 'at least', numInput(f, 'min', { min: 0, width: '60px' }), 'at most', numInput(f, 'max', { min: 0, blank: true, width: '64px' })),
-        h('div', { class: 'inline' }, 'within', numInput(f, 'radius', { min: 16, step: 50 }), 'blocks of', span(centerText(sd ?? 0))),
+        h('div', { class: 'inline' }, 'within', numInput(f, 'radius', { min: 0, step: 50 }), 'blocks of', span(centerText(sd ?? 0))),
       ];
       if (f.st === 5 && state.mc >= 17) { // 1.14+: village types & zombie villages
         body.push(h('div', { class: 'inline' }, 'Village',
@@ -891,17 +996,28 @@ function renderFilters() {
       title = 'Strongholds';
       body = [h('div', { class: 'inline' }, 'at least', numInput(f, 'min', { min: 1, max: 128, width: '56px' }), 'within', numInput(f, 'radius', { min: 16, step: 100 }), 'blocks of', span(centerText(0))),
         h('div', { class: 'hint' }, 'The first ring of 3 strongholds is ~1280–2816 blocks from 0,0.')];
+    } else if (f.type === 'chests') {
+      title = 'Chests close together';
+      body = [
+        h('div', { class: 'inline' }, 'at least', numInput(f, 'min', { min: 1, max: 40, width: '56px' }), 'guaranteed chests within', numInput(f, 'size', { min: 1, step: 8, width: '70px' }), 'blocks of each other'),
+        h('div', { class: 'inline' }, 'somewhere within', numInput(f, 'radius', { min: 16, step: 50 }), 'blocks of', span(centerText(0))),
+        h('div', { class: 'hint' }, 'Counts structures with guaranteed loot chests: desert pyramid 4, jungle temple 2, igloo with basement, buried treasure, shipwreck, ruined portal, pillager outpost 1 each. A desert pyramid alone is 4 chests side by side.'),
+      ];
     } else if (f.type === 'slime') {
       title = 'Slime chunks';
       body = [h('div', { class: 'inline' }, 'at least', numInput(f, 'min', { min: 1, width: '56px' }), 'within', numInput(f, 'radius', { min: 8, step: 16 }), 'blocks of', span(centerText(0)))];
     }
     box.append(h('div', { class: 'filter' }, h('div', { class: 'ftitle' }, title, tools), ...body));
   });
+  refreshIssues();
 }
 
-function changed() { persist(); requestDraw(); }
+function changed(fromCode = false) {
+  if (!fromCode && state.filterMode === 'builder') state.codeSynced = false;
+  persist(); requestDraw(); refreshIssues();
+}
 
-const FILTER_CODES = { spawnBiome: 1, biome: 2, struct: 3, stronghold: 4, slime: 5, cluster: 6, spawnDist: 7, spawnHeight: 8 };
+const FILTER_CODES = { spawnBiome: 1, biome: 2, struct: 3, stronghold: 4, slime: 5, cluster: 6, spawnDist: 7, spawnHeight: 8, chests: 9 };
 
 function encodeFilters() {
   const HDR = 4, REC = 16;
@@ -916,7 +1032,11 @@ function encodeFilters() {
     if ((f.type === 'struct' || f.type === 'cluster') && structDimOf(f.st) === undefined) { problems.push(`${structLabel(f.st)} does not exist in this version.`); continue; }
     arr[b] = FILTER_CODES[f.type];
     switch (f.type) {
-      case 'spawnBiome': arr[b + 1] = f.exclude ? 1 : 0; break;
+      case 'spawnBiome':
+        arr[b + 1] = f.exclude ? 1 : 0;
+        arr[b + 2] = !f.exclude && f.size > 0 ? f.size : 0; arr[b + 3] = f.sizePct || 90;
+        break;
+      case 'chests': arr[b + 2] = f.radius; arr[b + 3] = f.min; arr[b + 4] = f.size || 16; break;
       case 'spawnDist': arr[b + 2] = f.max; arr[b + 3] = f.min || 0; break;
       case 'spawnHeight': arr[b + 2] = f.min; arr[b + 3] = f.max; break;
       case 'biome': {
@@ -950,6 +1070,7 @@ function encodeFilters() {
 let search = null;
 
 function startSearch() {
+  if (!refreshIssues()) { toast(lastIssues.errors[0]?.msg || 'Fix the code errors first.'); return; }
   const { arr, problems } = encodeFilters();
   if (problems.length) { toast(problems[0]); return; }
   let next = 0n;
@@ -961,7 +1082,7 @@ function startSearch() {
   clearResultList();
   const s = {
     workers: [], tested: 0, found: [], seen: new Set(), t0: performance.now(),
-    mc: state.mc, large: state.large, filters: arr, random: state.mode === 'random', next,
+    mc: state.mc, wt: state.worldType, fixed: fixedBiome(), filters: arr, random: state.mode === 'random', next,
     max: state.maxResults, firstShown: false,
   };
   search = s;
@@ -969,7 +1090,7 @@ function startSearch() {
     let base;
     if (s.random) base = random64();
     else { base = s.next; s.next = BigInt.asIntN(64, s.next + BigInt(count)); }
-    return { type: 'search', mc: s.mc, large: s.large, filters: s.filters, base, count, random: s.random };
+    return { type: 'search', mc: s.mc, wt: s.wt, fixed: s.fixed, filters: s.filters, base, count, random: s.random };
   };
   for (let i = 0; i < state.threads; i++) {
     const w = new Worker('./worker.js', { type: 'module' });
@@ -1005,10 +1126,12 @@ function stopSearch() {
 
 const ico = (name) => `<svg class="ic"><use href="#i-${name}"/></svg>`;
 
-function setSearchButton(running) {
+function setSearchButton(running, blocked = false) {
   const b = $('searchBtn');
-  b.innerHTML = running ? `${ico('stop')}Stop search` : `${ico('play')}Start search`;
+  b.innerHTML = running ? `${ico('stop')}Stop search` : blocked ? `Can't search: fix the filters` : `${ico('play')}Start search`;
   b.classList.toggle('stop', running);
+  b.classList.toggle('blocked', !running && blocked);
+  b.title = !running && blocked ? 'Some filters can never match together. See the red notes in Filters.' : '';
   $('clearResults').disabled = running;
 }
 
@@ -1108,9 +1231,13 @@ function setupSearchUi() {
     state.filters = p.filters.map(resolvePreset);
     const missing = state.filters.filter((f) => (f.type === 'biome' || f.type === 'spawnBiome') && !f.biomes.length);
     changed(); renderFilters();
+    if (state.filterMode === 'code') { state.codeSynced = false; setFilterMode('code'); }
     toast(missing.length ? `Loaded "${label}" — some biomes don't exist in this version` : `Loaded "${label}"`);
   };
-  $('clearFilters').onclick = () => { state.filters = []; changed(); renderFilters(); };
+  $('clearFilters').onclick = () => {
+    state.filters = []; changed(); renderFilters();
+    if (state.filterMode === 'code') { state.code = ''; state.codeSynced = false; setFilterMode('code'); }
+  };
 
   const go = () => {
     const s = parseSeed($('seedInput').value);
@@ -1183,6 +1310,113 @@ function setupAppStatus() {
   api.onUpdate((s) => { last = s || last; render(last); });
 }
 
+// ---------------------------------------------------------------------------
+// Code mode
+// ---------------------------------------------------------------------------
+
+const GROUP_ALIASES = {
+  oceans: 'All oceans', deep_oceans: 'Deep oceans', warm_oceans: 'Warm & lukewarm oceans', land: 'Land (not ocean or river)',
+  rivers: 'Rivers', beaches: 'Beaches & shores', forests: 'Forests', taigas: 'Taigas', jungles: 'Jungles',
+  snowy: 'Snowy & frozen', mountains: 'Mountains & peaks', badlands: 'Badlands', savannas: 'Savannas',
+  swamps: 'Swamps', caves: 'Cave biomes',
+};
+
+function codeCtx() {
+  const groups = {};
+  for (const [alias, label] of Object.entries(GROUP_ALIASES)) groups[alias] = BIOME_GROUPS.find(([l]) => l === label)[1];
+  return {
+    biomeId: (name) => biomeIdByKey[name],
+    biomeKeys: (dim) => biomes[dim].map((b) => b.key),
+    biomeName: (id) => meta.biomeName(id),
+    groups,
+  };
+}
+
+let codeTimer = null;
+function compileCode(again = false) {
+  const { filters, errors, settings } = parseCode(state.code, codeCtx());
+  codeErrors = errors;
+  // settings first: they change which biomes/structures exist
+  let worldChanged = false;
+  if (settings.version) {
+    const opt = [...$('version').options].find((o) => o.textContent.replace('Java ', '').split(/[ (]/)[0] === settings.version)
+      || [...$('version').options].find((o) => o.textContent.includes(settings.version));
+    if (!opt) codeErrors.push({ line: 0, msg: `Unknown version "${settings.version}".` });
+    else if (+opt.value !== state.mc) { state.mc = +opt.value; $('version').value = opt.value; worldChanged = true; }
+  }
+  if (settings.worldType !== undefined && (settings.worldType !== state.worldType || (settings.worldType === 4 && settings.singleBiome !== state.singleBiome))) {
+    if (WORLD_TYPES[settings.worldType].minMc > state.mc) codeErrors.push({ line: 0, msg: `${WORLD_TYPES[settings.worldType].name} doesn't exist in this version.` });
+    else { state.worldType = settings.worldType; if (settings.singleBiome !== undefined) state.singleBiome = settings.singleBiome; worldChanged = true; }
+  }
+  if (settings.center) {
+    state.center = settings.center.mode;
+    if (settings.center.mode === 2) { state.cx = settings.center.x; state.cz = settings.center.z; $('cx').value = state.cx; $('cz').value = state.cz; }
+    $('center').value = state.center; $('customCenter').hidden = state.center !== 2;
+  }
+  if (worldChanged) { stopSearch(); loadVersionMeta(); renderWorldTypes(); renderLegend(); resetWorld(); }
+  if (worldChanged && !again) return compileCode(true); // re-resolve names for the new version
+  if (!errors.length) { state.filters = filters; state.codeSynced = true; }
+  renderCodeErrors();
+  renderFilters();
+  changed(true);
+}
+
+function renderCodeErrors() {
+  const box = $('codeErrors');
+  box.innerHTML = '';
+  for (const e of codeErrors) box.append(h('div', { class: 'issue bad' }, h('b', {}, e.line ? `Line ${e.line}: ` : ''), e.msg));
+  box.hidden = !codeErrors.length;
+  const lines = state.code.split('\n').length;
+  $('codeLines').textContent = Array.from({ length: Math.max(lines, 1) }, (_, i) => i + 1).join('\n');
+  const bad = new Set(codeErrors.map((e) => e.line));
+  $('codeStatus').textContent = codeErrors.length ? `${codeErrors.length} problem${codeErrors.length > 1 ? 's' : ''}` : `${state.filters.length} condition${state.filters.length === 1 ? '' : 's'} ✓`;
+  $('codeStatus').className = codeErrors.length ? 'code-status bad' : 'code-status ok';
+}
+
+function setFilterMode(mode) {
+  if (mode === 'code' && (!state.codeSynced || !state.code.trim())) {
+    state.code = state.filters.length ? toCode(state.filters, { center: state.center, cx: state.cx, cz: state.cz }, codeCtx()) : STARTER;
+    $('codeInput').value = state.code;
+    if (state.filters.length) toast('Turned your filters into code');
+  }
+  state.filterMode = mode;
+  for (const b of $('modeTabs').children) b.classList.toggle('on', b.dataset.mode === mode);
+  $('builderPane').hidden = mode !== 'builder';
+  $('codePane').hidden = mode !== 'code';
+  if (mode === 'code') compileCode(); else { codeErrors = []; renderFilters(); }
+  persist();
+}
+
+function setupCodeMode() {
+  const ta = $('codeInput');
+  ta.value = state.code;
+  ta.addEventListener('input', () => {
+    state.code = ta.value;
+    clearTimeout(codeTimer);
+    codeTimer = setTimeout(compileCode, 250);
+  });
+  ta.addEventListener('scroll', () => { $('codeLines').scrollTop = ta.scrollTop; });
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') { e.preventDefault(); const p = ta.selectionStart; ta.setRangeText('  ', p, ta.selectionEnd, 'end'); ta.dispatchEvent(new Event('input')); }
+  });
+  for (const b of $('modeTabs').children) b.onclick = () => setFilterMode(b.dataset.mode);
+  const ref = $('codeRef');
+  for (const [section, items] of REFERENCE) {
+    ref.append(h('div', { class: 'ref-head' }, section));
+    for (const [code, desc] of items) {
+      ref.append(h('div', { class: 'ref-row', title: 'Click to add this line', onclick: () => {
+        const v = ta.value.replace(/\s*$/, '');
+        ta.value = (v ? v + '\n' : '') + code + '\n';
+        ta.dispatchEvent(new Event('input'));
+        ta.focus();
+      } }, h('code', {}, code), h('span', {}, desc)));
+    }
+  }
+  ref.append(h('div', { class: 'ref-head' }, 'Names'),
+    h('div', { class: 'ref-note' }, 'Biomes use their game IDs (cherry_grove, dark_forest…). Use * as a wildcard (*ocean*) or a group: ' +
+      Object.keys(GROUP_ALIASES).map((k) => '@' + k).join(', ') + '.'));
+}
+
 async function boot() {
   setupResizer();
   setupAppStatus();
@@ -1200,6 +1434,9 @@ async function boot() {
   pool = new Pool(Math.max(2, Math.min(6, cores - 1)));
   setupMapInput();
   setupSearchUi();
+  renderWorldTypes();
+  setupCodeMode();
+  setFilterMode(state.filterMode);
   renderFilters();
   renderLegend();
   resetWorld();

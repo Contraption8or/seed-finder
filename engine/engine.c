@@ -57,10 +57,31 @@ static void set_seed(uint64_t seed)
     seededO = seededN = seededE = seededSN = 0;
 }
 
-EXPORT(eng_setup) void eng_setup(int mc, int largeBiomes)
+// World types (Java "World Type" button)
+enum { WT_DEFAULT = 0, WT_LARGE = 1, WT_AMPLIFIED = 2, WT_FLAT = 3, WT_SINGLE = 4 };
+static int g_wt = WT_DEFAULT;
+
+// Superflat ("Classic Flat" preset) only generates villages and strongholds.
+static int sf_struct_config(int st, int mc, StructureConfig *sc)
+{
+    if (!getStructureConfig(st, mc, sc)) return 0;
+    if (g_wt == WT_FLAT && sc->dim == DIM_OVERWORLD && st != Village) return 0;
+    return 1;
+}
+#define getStructureConfig sf_struct_config
+
+// Flat worlds (1.19.3+) place strongholds with seed 0, so they are the same in
+// every superflat world (ChunkGeneratorStructureState.createForFlat).
+static uint64_t stronghold_seed(void) { return (g_wt == WT_FLAT && g_mc >= MC_1_19_4) ? 0 : g_seed; }
+
+// worldType: WT_*; fixedBiome: biome id for WT_SINGLE (ignored otherwise)
+EXPORT(eng_setup) void eng_setup(int mc, int worldType, int fixedBiome)
 {
     g_mc = mc;
-    g_flags = largeBiomes ? LARGE_BIOMES : 0;
+    g_wt = worldType;
+    g_flags = worldType == WT_LARGE ? LARGE_BIOMES : 0;
+    g_sf_amplified = worldType == WT_AMPLIFIED;
+    g_sf_fixed_biome = worldType == WT_FLAT ? plains : worldType == WT_SINGLE ? fixedBiome : -1;
     setupGenerator(&gO, mc, g_flags);
     setupGenerator(&gN, mc, g_flags);
     setupGenerator(&gE, mc, g_flags);
@@ -146,7 +167,9 @@ static Pos spawn_cached(void)
 {
     if (!spawnValid || spawnSeed != g_seed || !seededO)
     {
-        spawnPos = getSpawn(gen_for(DIM_OVERWORLD));
+        // superflat worlds always spawn at 0,0 (verified on the official server)
+        if (g_wt == WT_FLAT) { spawnPos.x = 0; spawnPos.z = 0; }
+        else spawnPos = getSpawn(gen_for(DIM_OVERWORLD));
         spawnSeed = g_seed;
         spawnValid = 1;
     }
@@ -234,7 +257,7 @@ EXPORT(eng_strongholds) int eng_strongholds(int count)
     if (g_mc < MC_1_0 || count <= 0) return 0;
     if (count > 128) count = 128;
     StrongholdIter sh;
-    initFirstStronghold(&sh, g_mc, g_seed);
+    initFirstStronghold(&sh, g_mc, stronghold_seed());
     Generator *g = gen_for(DIM_OVERWORLD);
     int n = 0;
     while (n < count)
@@ -288,9 +311,11 @@ EXPORT(eng_spawn_height) int eng_spawn_height(void)
 //  6 CLUSTER       p1 = type, p2 = search radius, p3 = cluster size (blocks), p4 = count
 //  7 SPAWN_DIST    p2 = max distance from 0,0, p3 = min distance
 //  8 SPAWN_HEIGHT  p2 = min y, p3 = max y (approximate surface)
+//  9 CHESTS        p2 = radius, p3 = min chests, p4 = cluster size (blocks)
+//  (1 SPAWN_BIOME also: p2 = biome size radius (0 = off), p3 = min % covered)
 
 enum { F_SPAWN_BIOME = 1, F_BIOME = 2, F_STRUCT = 3, F_STRONGHOLD = 4, F_SLIME = 5,
-       F_CLUSTER = 6, F_SPAWN_DIST = 7, F_SPAWN_HEIGHT = 8 };
+       F_CLUSTER = 6, F_SPAWN_DIST = 7, F_SPAWN_HEIGHT = 8, F_CHESTS = 9 };
 #define FHDR 4
 #define FREC 16
 #define FMAX 32
@@ -307,12 +332,10 @@ static inline int mask_has(const int32_t *m, int id)
 static inline long long d2(long long dx, long long dz) { return dx * dx + dz * dz; }
 
 // mode 0: any present, 1: none present, 2: all present, 3: coverage in [lo,hi] %
-static int biome_check(int dim, int cx, int cz, int R, const int32_t *mask,
-                       int mode, int qy, int lo, int hi)
+static int biome_check_lim(int dim, int cx, int cz, int R, const int32_t *mask,
+                       int mode, int qy, int lo, int hi, int limit)
 {
     Generator *g = gen_for(dim);
-    int limit = (g_mc >= MC_1_18 || dim != DIM_OVERWORLD) ? 72 : 256;
-    if (mode == 3) limit = limit * 2 / 3;
     int s = 4;
     while ((2 * R) / s > limit && s < 256) s *= 4;
     int x0 = floordiv(cx - R, s), z0 = floordiv(cz - R, s);
@@ -350,6 +373,79 @@ static int biome_check(int dim, int cx, int cz, int R, const int32_t *mask,
     if (total == 0) return 0;
     double pct = 100.0 * hit / total;
     return pct >= lo && pct <= hi;
+}
+
+static int biome_check(int dim, int cx, int cz, int R, const int32_t *mask,
+                       int mode, int qy, int lo, int hi)
+{
+    int limit = (g_mc >= MC_1_18 || dim != DIM_OVERWORLD) ? 72 : 256;
+    if (mode == 3) limit = limit * 2 / 3;
+    return biome_check_lim(dim, cx, cz, R, mask, mode, qy, lo, hi, limit);
+}
+
+// Structures with guaranteed loot chests -> how many (0 = none guaranteed)
+static int chest_count(int st, int x, int z)
+{
+    switch (st)
+    {
+    case Desert_Pyramid: return 4;
+    case Jungle_Pyramid: return 2;
+    case Treasure: case Shipwreck: case Ruined_Portal: case Outpost: return 1;
+    case Igloo:
+    {
+        StructureVariant sv;
+        getVariant(&sv, Igloo, g_mc, g_seed, x, z, -1);
+        return sv.basement ? 1 : 0;
+    }
+    }
+    return 0;
+}
+
+// Is there a spot within R of the centre where structures within D blocks of
+// each other add up to >= N guaranteed chests?
+static int chests_check(int cx, int cz, int R, int N, int D)
+{
+    static const int types[] = { Desert_Pyramid, Jungle_Pyramid, Igloo, Treasure, Shipwreck, Ruined_Portal, Outpost };
+    static Pos pts[512]; static int cnt[512];
+    int np = 0, E = R + D;
+    for (size_t t = 0; t < sizeof(types) / sizeof(types[0]); t++)
+    {
+        int st = types[t];
+        StructureConfig sc;
+        if (!getStructureConfig(st, g_mc, &sc) || sc.dim != DIM_OVERWORLD) continue;
+        int reg = sc.regionSize * 16;
+        for (int rz = floordiv(cz - E, reg) - 1; rz <= floordiv(cz + E, reg) && np < 512; rz++)
+        for (int rx = floordiv(cx - E, reg) - 1; rx <= floordiv(cx + E, reg) && np < 512; rx++)
+        {
+            Pos p;
+            if (!getStructurePos(st, g_mc, g_seed, rx, rz, &p)) continue;
+            if (d2(p.x - cx, p.z - cz) > (long long) E * E) continue;
+            int c = chest_count(st, p.x, p.z);
+            if (!c || !viable(st, &sc, p.x, p.z)) continue;
+            pts[np] = p; cnt[np] = c; np++;
+        }
+    }
+    long long D2 = (long long) D * D;
+    for (int i = 0; i < np; i++)
+    {
+        if (d2(pts[i].x - cx, pts[i].z - cz) > (long long) R * R) continue;
+        int n = 0;
+        for (int j = 0; j < np; j++)
+            if (d2(pts[j].x - pts[i].x, pts[j].z - pts[i].z) <= D2) n += cnt[j];
+        if (n >= N) return 1;
+    }
+    return 0;
+}
+
+// Structure placement info for the UI's impossibility checks:
+// outbuf = [regionSize, chunkRange, dim, available]
+EXPORT(eng_struct_info) int *eng_struct_info(int st)
+{
+    StructureConfig sc;
+    int ok = getStructureConfig(st, g_mc, &sc);
+    outbuf[0] = ok ? sc.regionSize : 0; outbuf[1] = ok ? sc.chunkRange : 0;
+    outbuf[2] = ok ? sc.dim : 99; outbuf[3] = ok;
+    return outbuf;
 }
 
 static int struct_base(int st) { return st == ST_END_CITY_SHIP ? End_City : st; }
@@ -407,7 +503,7 @@ static int struct_count(const int32_t *f, int cx, int cz, int limit)
 static int stronghold_count(int cx, int cz, int R, int limit)
 {
     StrongholdIter sh;
-    Pos ap = initFirstStronghold(&sh, g_mc, g_seed);
+    Pos ap = initFirstStronghold(&sh, g_mc, stronghold_seed());
     long long R2s = (long long)(R + 112) * (R + 112);
     Generator *g = gen_for(DIM_OVERWORLD);
     double cd = __builtin_sqrt((double) cx * cx + (double) cz * cz);
@@ -535,12 +631,22 @@ static int test_seed(uint64_t seed)
             }
             break;
         case F_SPAWN_BIOME:
-            if (pass != 0) break;
+            if (pass == 0)
             {
                 Pos sp = spawn_cached();
                 int id = getBiomeAt(gen_for(DIM_OVERWORLD), 4, sp.x >> 2, 15, sp.z >> 2);
                 if (mask_has(f + 8, id) == (f[1] != 0)) return 0;
             }
+            else if (pass == 2 && f[2] > 0 && !f[1])
+            {   // biome size: the spawn biome(s) cover >= p3 % of a radius-p2 circle
+                Pos sp = spawn_cached();
+                if (!biome_check_lim(DIM_OVERWORLD, sp.x, sp.z, f[2], f + 8, 3, 15,
+                                     f[3] > 0 ? f[3] : 90, 100, 112)) return 0;
+            }
+            break;
+        case F_CHESTS:
+            if (pass != 1) break;
+            if (!chests_check(ox, oz, f[2], f[3], f[4] > 0 ? f[4] : 16)) return 0;
             break;
         case F_SPAWN_HEIGHT:
             if (pass != 0) break;

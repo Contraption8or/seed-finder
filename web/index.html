@@ -46,12 +46,17 @@
       <div class="card-head">
         <div class="head-title"><span class="tile"><svg class="ic"><use href="#i-sliders"/></svg></span><h2>World</h2></div>
       </div>
-      <div class="row">
-        <label>Version
-          <select id="version"></select>
-        </label>
-        <label class="check"><input type="checkbox" id="large"> Large biomes</label>
+      <label>Version
+        <select id="version"></select>
+      </label>
+      <div class="field">
+        <span class="field-label">World type</span>
+        <div class="seg" id="worldTypes"></div>
+        <div class="hint" id="wtHint"></div>
       </div>
+      <label id="singleBiomeRow" hidden>Biome for the whole world
+        <select id="singleBiome"></select>
+      </label>
       <label>Measure distances from
         <select id="center">
           <option value="1">World spawn</option>
@@ -73,9 +78,28 @@
           <button id="clearFilters" class="mini ghost" title="Remove all filters">Clear</button>
         </div>
       </div>
-      <select id="addFilter" class="accent-select"></select>
-      <div id="filters"></div>
-      <div id="noFilters" class="hint">No filters yet — every seed will match. Add one above or load a preset.</div>
+      <div class="seg mode-tabs" id="modeTabs">
+        <button data-mode="builder" class="on">Builder</button>
+        <button data-mode="code">Code</button>
+      </div>
+      <div id="issues" hidden></div>
+      <div id="builderPane">
+        <select id="addFilter" class="accent-select"></select>
+        <div id="filters"></div>
+        <div id="noFilters" class="hint">No filters yet — every seed will match. Add one above or load a preset.</div>
+      </div>
+      <div id="codePane" hidden>
+        <div class="code-wrap">
+          <pre id="codeLines" aria-hidden="true">1</pre>
+          <textarea id="codeInput" spellcheck="false" autocomplete="off" wrap="off" placeholder="village within 300"></textarea>
+        </div>
+        <div class="code-bar"><span id="codeStatus" class="code-status"></span><span class="hint">Updates as you type. One condition per line; all must match.</span></div>
+        <div id="codeErrors" hidden></div>
+        <details class="code-ref">
+          <summary>Reference: everything you can write (click a line to add it)</summary>
+          <div id="codeRef"></div>
+        </details>
+      </div>
     </section>
 
     <section class="card promo" id="searchCard">

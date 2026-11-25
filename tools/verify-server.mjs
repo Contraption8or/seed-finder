@@ -12,7 +12,11 @@ import { spawn } from 'child_process';
 import { createEngine } from '../web/wasm-api.js';
 
 const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'));
-const [jar, mcArg, seedArg, work, radArg] = process.argv.slice(2);
+const [jar, mcArg, seedArg, work, radArg, wtArg = 'default'] = process.argv.slice(2);
+// world type: server level-type + engine world type (single biome = plains, the server default)
+const WT = { default: ['minecraft:normal', 0, -1], large: ['minecraft:large_biomes', 1, -1], amplified: ['minecraft:amplified', 2, -1],
+  flat: ['minecraft:flat', 3, -1], single: ['minecraft:single_biome_surface', 4, 1] }[wtArg];
+if (!WT) throw new Error('world type must be default|large|amplified|flat|single');
 const MC = +mcArg, SEED = BigInt(seedArg), R = +(radArg || 12);
 const JAVA = process.env.JAVA || 'java';
 
@@ -87,7 +91,7 @@ function runServer() {
   fs.mkdirSync(work, { recursive: true });
   fs.writeFileSync(path.join(work, 'eula.txt'), 'eula=true\n');
   fs.writeFileSync(path.join(work, 'server.properties'), [
-    `level-seed=${SEED}`, 'online-mode=false', 'server-port=25611', 'view-distance=3',
+    `level-seed=${SEED}`, `level-type=${WT[0]}`, 'online-mode=false', 'server-port=25611', 'view-distance=3',
     'simulation-distance=3', 'spawn-protection=0', 'generate-structures=true', 'level-name=world',
     'pause-when-empty-seconds=-1', 'sync-chunk-writes=false', 'max-tick-time=-1', 'motd=verify',
   ].join('\n') + '\n');
@@ -114,6 +118,11 @@ function runServer() {
         fl('the_end', -4, -4, 3, 3);
         fl('the_end', 64, -8, 79, 7);
         send('locate structure minecraft:stronghold');
+        // LOCATE_AT="x,z;x,z": extra stronghold lookups from those points (debugging)
+        for (const pt of (process.env.LOCATE_AT || '').split(';').filter(Boolean)) {
+          const [lx, lz] = pt.split(',');
+          send(`execute positioned ${lx} 64 ${lz} run locate structure minecraft:stronghold`);
+        }
       }
       const m = s.match(/nearest minecraft:stronghold is at \[(-?\d+), [^,]+, (-?\d+)\]/);
       if (m) located = { x: +m[1], z: +m[2] };
@@ -152,7 +161,7 @@ if (!process.env.SKIP_SERVER) ({ located } = await runServer());
 console.log(`server done in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
 
 const eng = await createEngine(await WebAssembly.compile(fs.readFileSync(path.join(here, '../web/engine.wasm'))));
-eng.world(MC, false, SEED);
+eng.world(MC, WT[1], SEED, WT[2]);
 const nameToId = {}; for (let i = 0; i < 256; i++) { const n = eng.biomeName(i); if (n && !(n in nameToId)) nameToId[n] = i; }
 
 const regionFiles = [];

@@ -602,6 +602,11 @@ size_t getMinLayerCacheSize(const Layer *layer, int sizeX, int sizeZ)
 
 int genArea(const Layer *layer, int *out, int areaX, int areaZ, int areaWidth, int areaHeight)
 {
+    if (g_sf_fixed_biome >= 0) // Seed Finder world types: single biome / superflat (layered versions)
+    {
+        for (int i = 0; i < areaWidth * areaHeight; i++) out[i] = g_sf_fixed_biome;
+        return 0;
+    }
     memset(out, 0, sizeof(*out)*areaWidth*areaHeight);
     return layer->getMap(layer, out, areaX, areaZ, areaWidth, areaHeight);
 }

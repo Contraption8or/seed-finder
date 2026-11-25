@@ -28,7 +28,7 @@ export async function createEngine(module) {
     return new TextDecoder().decode(u8.subarray(ptr, end));
   };
 
-  let cur = { mc: -1, large: -1, seed: null };
+  let cur = { mc: -1, wt: -1, fixed: -2, seed: null };
 
   const api = {
     ex,
@@ -40,10 +40,13 @@ export async function createEngine(module) {
     colors: () => new Uint8Array(ex.memory.buffer, ex.eng_colors(), 768).slice(),
 
     // Only re-applies state that actually changed (applySeed is not free).
-    world(mc, large, seed) {
-      if (mc !== cur.mc || large !== cur.large) {
-        ex.eng_setup(mc, large ? 1 : 0);
-        cur.mc = mc; cur.large = large; cur.seed = null;
+    // worldType: 0 default, 1 large biomes, 2 amplified, 3 superflat, 4 single biome
+    // (true/false still mean large biomes / default). fixedBiome: for single biome.
+    world(mc, worldType, seed, fixedBiome = -1) {
+      const wt = typeof worldType === 'boolean' ? (worldType ? 1 : 0) : (worldType | 0);
+      if (mc !== cur.mc || wt !== cur.wt || fixedBiome !== cur.fixed) {
+        ex.eng_setup(mc, wt, fixedBiome);
+        cur.mc = mc; cur.wt = wt; cur.fixed = fixedBiome; cur.seed = null;
       }
       if (seed !== cur.seed) {
         ex.eng_seed(BigInt.asIntN(64, seed));
@@ -74,6 +77,11 @@ export async function createEngine(module) {
     },
 
     spawnHeight: () => ex.eng_spawn_height(),
+
+    structInfo(st) {
+      const o = i32(ex.eng_struct_info(st), 4);
+      return { regionSize: o[0], chunkRange: o[1], dim: o[2], available: !!o[3] };
+    },
 
     spawn() {
       const o = i32(ex.eng_spawn(), 2);

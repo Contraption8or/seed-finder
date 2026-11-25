@@ -1,5 +1,5 @@
 // Worker: owns one engine instance. Handles map tiles, world info, and
-// seed-search batches. Every job carries its own world (mc/large/seed), so
+// seed-search batches. Every job carries its own world (mc/world type/seed), so
 // workers are interchangeable and stateless from the main thread's view.
 import { createEngine } from './wasm-api.js';
 
@@ -31,8 +31,8 @@ function handle(msg) {
 function run(msg) {
   switch (msg.type) {
     case 'tile': {
-      const { mc, large, seed, dim, scale, tx, tz, size, structTypes } = msg;
-      eng.world(mc, large, seed);
+      const { mc, wt, fixed, seed, dim, scale, tx, tz, size, structTypes } = msg;
+      eng.world(mc, wt, seed, fixed);
       const ids = eng.map(dim, scale, tx * size, tz * size, size, size);
       const slime = msg.slime ? eng.slime(tx * size * scale / 16, tz * size * scale / 16, size * scale / 16, size * scale / 16) : null;
       let structs = [];
@@ -44,16 +44,16 @@ function run(msg) {
       return { data: { ids, structs, slime }, transfer: ids ? [ids.buffer] : [] };
     }
     case 'info': {
-      const { mc, large, seed } = msg;
-      eng.world(mc, large, seed);
+      const { mc, wt, fixed, seed } = msg;
+      eng.world(mc, wt, seed, fixed);
       if (msg.full) return { data: { strongholds: eng.strongholds(128) } };
       const spawn = eng.spawn();
       const strongholds = eng.strongholds(3);
       return { data: { spawn, strongholds, height: eng.spawnHeight() } };
     }
     case 'search': {
-      const { mc, large, filters, base, count, random } = msg;
-      eng.world(mc, large, 0n);
+      const { mc, wt, fixed, filters, base, count, random } = msg;
+      eng.world(mc, wt, 0n, fixed);
       eng.setFilters(filters);
       const t0 = performance.now();
       const found = eng.search(base, count, random);

@@ -652,6 +652,19 @@ Pos locateBiome(
     int i, j, found;
     found = 0;
 
+    if (g_sf_fixed_biome >= 0 && g->dim == DIM_OVERWORLD) // Seed Finder world types
+    {
+        if (!id_matches(g_sf_fixed_biome, validB, validM))
+        {
+            if (passes) *passes = 0;
+            return out;
+        }
+        out.x = x - radius + nextInt(rng, 2 * radius + 1);
+        out.z = z - radius + nextInt(rng, 2 * radius + 1);
+        if (passes) *passes = 1;
+        return out;
+    }
+
     if (g->mc >= MC_1_18)
     {
         x >>= 2;

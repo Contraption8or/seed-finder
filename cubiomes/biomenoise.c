@@ -956,8 +956,13 @@ static void addSplineVal(Spline *rsp, float loc, Spline *val, float der)
     //}
 }
 
+int g_sf_amplified = 0;    // Seed Finder world types
+int g_sf_fixed_biome = -1;
+
 static Spline *createFixSpline(SplineStack *ss, float val)
 {
+    if (g_sf_amplified && val > 0) // amplified: AMPLIFIED_OFFSET
+        val *= 2.0F;
     FixSpline *sp = &ss->fstack[ss->flen++];
     sp->len = 1;
     sp->val = val;
@@ -1434,6 +1439,8 @@ int get_resulting_node(const uint64_t np[6], const BiomeTree *bt, int idx,
 ATTR(hot, flatten)
 int climateToBiome(int mc, const uint64_t np[6], uint64_t *dat)
 {
+    if (g_sf_fixed_biome >= 0) // Seed Finder world types: single biome / superflat
+        return g_sf_fixed_biome;
     static const BiomeTree btree18 = {
         btree18_steps, &btree18_param[0][0], btree18_nodes, btree18_order,
         sizeof(btree18_nodes) / sizeof(uint64_t)

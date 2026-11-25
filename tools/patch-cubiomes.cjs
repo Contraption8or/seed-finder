@@ -5,12 +5,12 @@ const fs = require('fs');
 const path = require('path');
 const dir = path.join(__dirname, '..', 'cubiomes');
 
-function patch(file, pairs) {
+function patch(file, pairs, marker = 'Seed Finder addition') {
   const full = path.join(dir, file);
   const raw = fs.readFileSync(full, 'utf8');
   const crlf = raw.includes('\r\n');
   let s = raw.replace(/\r\n/g, '\n');
-  if (s.includes('Seed Finder addition')) { console.log('already patched', file); return; }
+  if (s.includes(marker)) { console.log(`already patched (${marker})`, file); return; }
   for (const [a, b] of pairs) {
     const n = s.split(a).length - 1;
     if (n !== 1) throw new Error(`${file}: expected 1 match, got ${n} for: ${a.slice(0, 80)}`);
@@ -197,3 +197,73 @@ patch('biomenoise.c', [
 
     if (mc >= MC_1_21_WD)`],
 ]);
+
+// ---------------------------------------------------------------------------
+// Stage 2: world types (Seed Finder world types)
+//  - Amplified (1.18+): the overworld offset spline doubles every positive
+//    leaf value (v < 0 ? v : 2v), derivatives unchanged. Verified against the
+//    official overworld_amplified/offset density function.
+//  - Superflat / Single Biome: a fixed overworld biome for every lookup.
+// ---------------------------------------------------------------------------
+const WT = 'Seed Finder world types';
+patch('biomenoise.h', [
+  [`int climateToBiome(int mc, const uint64_t np[6], uint64_t *dat);`,
+   `int climateToBiome(int mc, const uint64_t np[6], uint64_t *dat);
+
+// ${WT}: set before setupGenerator() / applySeed()
+extern int g_sf_amplified;     // 1 = amplified offset spline (1.18+)
+extern int g_sf_fixed_biome;   // >= 0: every overworld biome lookup returns this`],
+], WT);
+patch('biomenoise.c', [
+  [`static Spline *createFixSpline(SplineStack *ss, float val)
+{`,
+   `int g_sf_amplified = 0;    // ${WT}
+int g_sf_fixed_biome = -1;
+
+static Spline *createFixSpline(SplineStack *ss, float val)
+{
+    if (g_sf_amplified && val > 0) // amplified: AMPLIFIED_OFFSET
+        val *= 2.0F;`],
+  [`int climateToBiome(int mc, const uint64_t np[6], uint64_t *dat)
+{`,
+   `int climateToBiome(int mc, const uint64_t np[6], uint64_t *dat)
+{
+    if (g_sf_fixed_biome >= 0) // ${WT}: single biome / superflat
+        return g_sf_fixed_biome;`],
+], WT);
+patch('generator.c', [
+  [`int genArea(const Layer *layer, int *out, int areaX, int areaZ, int areaWidth, int areaHeight)
+{`,
+   `int genArea(const Layer *layer, int *out, int areaX, int areaZ, int areaWidth, int areaHeight)
+{
+    if (g_sf_fixed_biome >= 0) // ${WT}: single biome / superflat (layered versions)
+    {
+        for (int i = 0; i < areaWidth * areaHeight; i++) out[i] = g_sf_fixed_biome;
+        return 0;
+    }`],
+], WT);
+// Fixed-biome worlds (superflat, single biome): FixedBiomeSource.findBiomeHorizontal
+// doesn't scan; it returns a random point in the square around the target.
+// (Verified against the official 26.3 server: stronghold rings for seeds 0, 158.)
+patch('finders.c', [
+  [`    Pos out = {x, z};
+    int i, j, found;
+    found = 0;
+`, `    Pos out = {x, z};
+    int i, j, found;
+    found = 0;
+
+    if (g_sf_fixed_biome >= 0 && g->dim == DIM_OVERWORLD) // ${WT}
+    {
+        if (!id_matches(g_sf_fixed_biome, validB, validM))
+        {
+            if (passes) *passes = 0;
+            return out;
+        }
+        out.x = x - radius + nextInt(rng, 2 * radius + 1);
+        out.z = z - radius + nextInt(rng, 2 * radius + 1);
+        if (passes) *passes = 1;
+        return out;
+    }
+`],
+], WT);
